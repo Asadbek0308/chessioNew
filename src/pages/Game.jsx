@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
-import { ArrowLeft, Copy, Globe, Users, Wifi, WifiOff, Handshake, Check, X } from 'lucide-react';
+import { ArrowLeft, Copy, Globe, Users, Wifi, WifiOff, Handshake, Check, X, Palette, Settings } from 'lucide-react';
 import Peer from 'peerjs';
 
 const PEER_CONFIG = {
@@ -11,6 +11,33 @@ const PEER_CONFIG = {
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
     ],
+  },
+};
+
+const BOARD_THEMES = {
+  wood: {
+    name: 'Classic Wood',
+    light: '#f0d9b5',
+    dark: '#b58863',
+    border: 'border-amber-950/40',
+  },
+  emerald: {
+    name: 'Emerald',
+    light: '#eeeed2',
+    dark: '#769656',
+    border: 'border-emerald-950/40',
+  },
+  ocean: {
+    name: 'Ocean',
+    light: '#e2f1f8',
+    dark: '#4b7399',
+    border: 'border-slate-800',
+  },
+  dark: {
+    name: 'Dark Neutral',
+    light: '#e8e8e6',
+    dark: '#262626',
+    border: 'border-neutral-800',
   },
 };
 
@@ -47,6 +74,10 @@ export default function Game() {
   const [selectedSquare, setSelectedSquare] = useState(null);
   const [validTargets, setValidTargets] = useState([]);
   const [copied, setCopied] = useState(false);
+
+  // Theme & Settings state
+  const [selectedThemeKey, setSelectedThemeKey] = useState('wood');
+  const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
 
   // Draw and Promotion state handling
   const [incomingDrawOffer, setIncomingDrawOffer] = useState(false);
@@ -149,11 +180,11 @@ export default function Game() {
 
       peer.on('error', (err) => {
         console.warn('PeerJS Error:', err.type, err);
-        
+
         if (err.type === 'unavailable-id' && isHost) {
           setTimeout(initPeer, 1500);
         }
-        
+
         if (err.type === 'peer-unavailable') {
           alert('Room not found or Host is offline. Make sure the Host tab is open first.');
         }
@@ -183,12 +214,12 @@ export default function Game() {
     moves.forEach((move) => {
       highlights[move.to] = {
         background: game.get(move.to)
-          ? 'radial-gradient(circle, rgba(255,255,255,0.55) 85%, transparent 85%)'
-          : 'radial-gradient(circle, rgba(255,255,255,0.35) 25%, transparent 25%)',
+          ? 'radial-gradient(circle, rgba(0,0,0,0.4) 85%, transparent 85%)'
+          : 'radial-gradient(circle, rgba(0,0,0,0.25) 25%, transparent 25%)',
         borderRadius: '50%',
       };
     });
-    highlights[square] = { backgroundColor: 'rgba(255, 255, 255, 0.25)' };
+    highlights[square] = { backgroundColor: 'rgba(255, 255, 255, 0.4)' };
     return highlights;
   };
 
@@ -216,7 +247,6 @@ export default function Game() {
   const attemptMove = (from, to, chosenPromotion = null) => {
     if (drawAgreed || (isOnline && game.turn() !== playerColor)) return false;
 
-    // Check if move requires pawn promotion piece selection
     if (isPromotionMove(from, to) && !chosenPromotion) {
       setPendingPromotion({ from, to });
       return false;
@@ -310,6 +340,8 @@ export default function Game() {
     }
   };
 
+  const currentTheme = BOARD_THEMES[selectedThemeKey];
+
   const chessboardOptions = {
     position: gameFen,
     boardOrientation: playerColor === 'b' ? 'black' : 'white',
@@ -317,13 +349,13 @@ export default function Game() {
     onPieceDrag: ({ square }) => selectSquare(square),
     onSquareClick,
     squareStyles: optionSquares,
-    darkSquareStyle: { backgroundColor: '#1f1f1f' },
-    lightSquareStyle: { backgroundColor: '#e8e8e6' },
-    dropSquareStyle: { boxShadow: 'inset 0 0 0 3px rgba(255,255,255,0.6)' },
+    darkSquareStyle: { backgroundColor: currentTheme.dark },
+    lightSquareStyle: { backgroundColor: currentTheme.light },
+    dropSquareStyle: { boxShadow: 'inset 0 0 0 3px rgba(255,255,255,0.7)' },
     boardStyle: {
-      borderRadius: '20px',
+      borderRadius: '16px',
       overflow: 'hidden',
-      boxShadow: '0 20px 50px -12px rgba(0,0,0,0.6)',
+      boxShadow: '0 20px 40px -10px rgba(0,0,0,0.5)',
     },
     animationDurationInMs: 200,
     id: 'main-board',
@@ -333,10 +365,11 @@ export default function Game() {
   const inCheck = game.inCheck() && !game.isCheckmate() && !drawAgreed;
 
   return (
-    <div className="min-h-screen bg-neutral-950 font-sans relative">
-      <div className="max-w-xl mx-auto px-5 pt-8 pb-16">
+    <div className="min-h-screen bg-neutral-950 font-sans relative flex flex-col justify-center py-4">
+      <div className="max-w-md sm:max-w-lg mx-auto w-full px-4">
 
-        <div className="flex items-center justify-between mb-6">
+        {/* Top Header Controls */}
+        <div className="flex items-center justify-between mb-4">
           <button
             onClick={() => navigate('/')}
             className="flex items-center gap-1.5 text-neutral-400 hover:text-white text-sm font-semibold transition-colors cursor-pointer"
@@ -345,31 +378,43 @@ export default function Game() {
             Back
           </button>
 
-          {isOnline ? (
-            <div className="flex items-center gap-2">
-              <span className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full ${peerConnected ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
-                {peerConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-                {peerConnected ? 'Connected' : 'Waiting for Peer'}
-              </span>
-              <button
-                onClick={copyRoomCode}
-                className="flex items-center gap-1.5 bg-neutral-900 border border-neutral-800 hover:border-neutral-600 text-white px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide transition-colors cursor-pointer"
-              >
-                <Globe className="w-3.5 h-3.5" />
-                {copied ? 'Copied!' : `Room ${room}`}
-                <Copy className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5 bg-neutral-900 border border-neutral-800 text-white px-3.5 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide">
-              <Users className="w-3.5 h-3.5" />
-              Local Play
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsThemeMenuOpen(true)}
+              className="flex items-center gap-1.5 bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-neutral-300 hover:text-white px-3 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer"
+              title="Board Customization"
+            >
+              <Palette className="w-3.5 h-3.5 text-amber-400" />
+              Theme
+            </button>
+
+            {isOnline ? (
+              <>
+                <span className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full ${peerConnected ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
+                  {peerConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+                  {peerConnected ? 'Connected' : 'Waiting'}
+                </span>
+                <button
+                  onClick={copyRoomCode}
+                  className="flex items-center gap-1.5 bg-neutral-900 border border-neutral-800 hover:border-neutral-600 text-white px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide transition-colors cursor-pointer"
+                >
+                  <Globe className="w-3.5 h-3.5" />
+                  {copied ? 'Copied!' : `Room ${room}`}
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              </>
+            ) : (
+              <div className="flex items-center gap-1.5 bg-neutral-900 border border-neutral-800 text-white px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide">
+                <Users className="w-3.5 h-3.5" />
+                Local Play
+              </div>
+            )}
+          </div>
         </div>
 
-        <div className="flex flex-col items-center gap-2 mb-5 text-center">
-          <h2 className="text-white text-lg font-bold m-0">
+        {/* Status bar */}
+        <div className="flex flex-col items-center gap-1.5 mb-3 text-center">
+          <h2 className="text-white text-base sm:text-lg font-bold m-0">
             {drawAgreed
               ? 'Game Over (Draw Agreed)'
               : gameOver
@@ -377,27 +422,28 @@ export default function Game() {
               : `${game.turn() === 'w' ? 'White' : 'Black'} to move ${isOnline ? `(You: ${playerColor === 'w' ? 'White' : 'Black'})` : ''}`}
           </h2>
           {inCheck && (
-            <span className="px-3 py-1 rounded-full bg-white text-black text-xs font-extrabold uppercase tracking-wider">
+            <span className="px-3 py-0.5 rounded-full bg-white text-black text-[11px] font-extrabold uppercase tracking-wider">
               Check
             </span>
           )}
           {drawNotice && (
-            <p className="text-amber-400 text-xs font-semibold m-0 bg-amber-400/10 px-3 py-1 rounded-full">
+            <p className="text-amber-400 text-xs font-semibold m-0 bg-amber-400/10 px-3 py-0.5 rounded-full">
               {drawNotice}
             </p>
           )}
         </div>
 
-        <div className="rounded-[20px] border border-neutral-800 bg-neutral-900 p-3 relative">
-          <div style={{ width: '100%', aspectRatio: '1/1' }}>
+        {/* Chessboard Box */}
+        <div className={`rounded-[20px] border ${currentTheme.border} bg-neutral-900 p-2.5 relative shadow-2xl`}>
+          <div className="w-full aspect-square">
             <Chessboard options={chessboardOptions} />
           </div>
 
           {/* Pawn Promotion Modal Overlay */}
           {pendingPromotion && (
-            <div className="absolute inset-0 bg-neutral-950/80 backdrop-blur-sm rounded-[20px] flex flex-col items-center justify-center p-6 z-20">
+            <div className="absolute inset-0 bg-neutral-950/85 backdrop-blur-xs rounded-[20px] flex flex-col items-center justify-center p-6 z-20">
               <h3 className="text-white text-base font-bold mb-4">Promote Pawn To</h3>
-              <div className="flex gap-3">
+              <div className="flex gap-2.5">
                 {[
                   { type: 'q', label: 'Queen', symbol: '♕' },
                   { type: 'r', label: 'Rook', symbol: '♖' },
@@ -407,9 +453,9 @@ export default function Game() {
                   <button
                     key={piece.type}
                     onClick={() => executePromotion(piece.type)}
-                    className="flex flex-col items-center justify-center w-16 h-20 bg-neutral-800 hover:bg-white hover:text-black text-white border border-neutral-700 rounded-xl transition-all cursor-pointer"
+                    className="flex flex-col items-center justify-center w-14 h-18 bg-neutral-800 hover:bg-white hover:text-black text-white border border-neutral-700 rounded-xl transition-all cursor-pointer"
                   >
-                    <span className="text-3xl mb-1">{piece.symbol}</span>
+                    <span className="text-2xl mb-1">{piece.symbol}</span>
                     <span className="text-[10px] font-bold uppercase">{piece.label}</span>
                   </button>
                 ))}
@@ -418,11 +464,12 @@ export default function Game() {
           )}
         </div>
 
-        <div className="flex justify-center mt-6">
+        {/* Action Controls */}
+        <div className="flex justify-center mt-4">
           <button
             onClick={offerDraw}
             disabled={gameOver}
-            className="flex items-center gap-2 px-6 py-3 text-sm font-bold text-white bg-neutral-900 border border-neutral-800 rounded-full cursor-pointer hover:bg-neutral-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-neutral-900 border border-neutral-800 rounded-full cursor-pointer hover:bg-neutral-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <Handshake className="w-4 h-4 text-amber-400" />
             Offer Draw
@@ -430,9 +477,50 @@ export default function Game() {
         </div>
       </div>
 
+      {/* Theme Settings Modal */}
+      {isThemeMenuOpen && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-5 max-w-xs w-full shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Palette className="w-4 h-4 text-amber-400" />
+                <h3 className="text-white text-sm font-bold m-0">Board Theme</h3>
+              </div>
+              <button
+                onClick={() => setIsThemeMenuOpen(false)}
+                className="text-neutral-400 hover:text-white p-1 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 mb-2">
+              {Object.entries(BOARD_THEMES).map(([key, theme]) => {
+                const isSelected = selectedThemeKey === key;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setSelectedThemeKey(key)}
+                    className={`flex flex-col items-center p-2.5 rounded-xl border transition-all cursor-pointer ${
+                      isSelected ? 'border-amber-400 bg-amber-400/10' : 'border-neutral-800 bg-neutral-950/50 hover:border-neutral-700'
+                    }`}
+                  >
+                    <div className="flex w-12 h-12 rounded-lg overflow-hidden border border-black/20 mb-2 shadow-inner">
+                      <div style={{ backgroundColor: theme.light }} className="w-1/2 h-full" />
+                      <div style={{ backgroundColor: theme.dark }} className="w-1/2 h-full" />
+                    </div>
+                    <span className="text-xs font-semibold text-neutral-200">{theme.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Opponent Draw Offer Interactive Popup */}
       {incomingDrawOffer && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 max-w-sm w-full text-center shadow-2xl">
             <Handshake className="w-8 h-8 text-amber-400 mx-auto mb-3" />
             <h3 className="text-white text-lg font-bold mb-1">Draw Offered</h3>
@@ -442,14 +530,14 @@ export default function Game() {
             <div className="flex gap-3">
               <button
                 onClick={acceptDraw}
-                className="flex-1 flex items-center justify-center gap-1.5 py-3 text-xs font-bold text-black bg-emerald-400 rounded-full hover:bg-emerald-300 transition-colors cursor-pointer"
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-bold text-black bg-emerald-400 rounded-full hover:bg-emerald-300 transition-colors cursor-pointer"
               >
                 <Check className="w-4 h-4" />
                 Accept
               </button>
               <button
                 onClick={rejectDraw}
-                className="flex-1 flex items-center justify-center gap-1.5 py-3 text-xs font-bold text-white bg-neutral-800 border border-neutral-700 rounded-full hover:bg-neutral-700 transition-colors cursor-pointer"
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-bold text-white bg-neutral-800 border border-neutral-700 rounded-full hover:bg-neutral-700 transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
                 Reject
