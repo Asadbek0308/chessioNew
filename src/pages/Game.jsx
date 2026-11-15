@@ -96,7 +96,10 @@ const PEER_CONFIG = {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
     ],
+    iceCandidatePoolSize: 10,
   },
 };
 
@@ -318,50 +321,81 @@ export default function Game() {
     }
   }, [game, clearSelection, playerColor, muted, triggerSound, startNewGame]);
 
+  const handleDataRef = useRef(handleData);
+  useEffect(() => {
+    handleDataRef.current = handleData;
+  }, [handleData]);
+
+  const gameRef = useRef(game);
+  useEffect(() => {
+    gameRef.current = game;
+  }, [game]);
+
+  const lastMoveRef = useRef(lastMove);
+  useEffect(() => {
+    lastMoveRef.current = lastMove;
+  }, [lastMove]);
+
   useEffect(() => {
     if (!isOnline || !room) return;
 
-    let peer;
-    let heartbeatInterval;
+    let peer = null;
+    let heartbeatInterval = null;
     let retryCount = 0;
+    let isCleanedUp = false;
     const hostPeerId = `chess-room-${room}`;
 
     const attachConnectionEvents = (connection) => {
       connRef.current = connection;
 
       connection.on('open', () => {
+        if (isCleanedUp) return;
         setPeerConnected(true);
+        setDrawNotice(null);
+
         if (isHost) {
           connection.send({
             type: 'SYNC_STATE',
-            fen: game.fen(),
-            lastMove,
+            fen: gameRef.current.fen(),
+            lastMove: lastMoveRef.current,
           });
         }
 
         clearInterval(heartbeatInterval);
         heartbeatInterval = setInterval(() => {
-          if (connection.open) connection.send({ type: 'PING' });
-        }, 5000);
+          if (connection.open) {
+            connection.send({ type: 'PING' });
+          }
+        }, 10000);
       });
 
       connection.on('data', (data) => {
         if (data.type === 'PING') return;
-        handleData(data);
+        handleDataRef.current?.(data);
       });
 
       connection.on('close', () => {
-        setPeerConnected(false);
-        setDrawNotice('Opponent disconnected.');
+        if (!isCleanedUp) {
+          setPeerConnected(false);
+          setDrawNotice('Opponent disconnected.');
+        }
       });
-      connection.on('error', () => setPeerConnected(false));
+
+      connection.on('error', () => {
+        if (!isCleanedUp) {
+          setPeerConnected(false);
+        }
+      });
     };
 
     const initPeer = () => {
+      if (isCleanedUp) return;
+
       if (isHost) {
         peer = new Peer(hostPeerId, PEER_CONFIG);
 
         peer.on('open', () => {
+          if (isCleanedUp) return;
           console.log('Host registered as:', hostPeerId);
         });
 
@@ -372,6 +406,7 @@ export default function Game() {
         peer = new Peer(PEER_CONFIG);
 
         peer.on('open', () => {
+          if (isCleanedUp) return;
           console.log('Guest connecting to host...');
           const connection = peer.connect(hostPeerId, { reliable: true });
           attachConnectionEvents(connection);
@@ -379,10 +414,11 @@ export default function Game() {
       }
 
       peer.on('error', (err) => {
+        if (isCleanedUp) return;
         console.warn('PeerJS Error:', err.type, err);
 
         if (err.type === 'unavailable-id' && isHost) {
-          if (retryCount < 2) {
+          if (retryCount < 3) {
             retryCount += 1;
             setTimeout(initPeer, 1500);
           } else {
@@ -399,10 +435,13 @@ export default function Game() {
     initPeer();
 
     return () => {
+      isCleanedUp = true;
       clearInterval(heartbeatInterval);
-      if (peer) peer.destroy();
+      if (peer) {
+        peer.destroy();
+      }
     };
-  }, [isOnline, room, isHost, game, handleData, lastMove]);
+  }, [isOnline, room, isHost]);
 
   const copyInviteLink = async () => {
     try {
