@@ -1,4 +1,3 @@
-import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Gamepad2, Globe, Search } from 'lucide-react';
 
