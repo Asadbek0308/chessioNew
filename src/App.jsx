@@ -6,7 +6,7 @@ import Hub from './pages/Hub';
 export default function App() {
   return (
     <BrowserRouter>
-      <div className="min-h-screen bg-neutral-950 pb-12">
+      <div className="min-h-screen bg-neutral-950 pb-12 w-full max-w-full overflow-x-hidden">
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/game" element={<Game />} />

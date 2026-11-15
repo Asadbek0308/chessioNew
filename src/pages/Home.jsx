@@ -30,7 +30,7 @@ export default function Home() {
 
         <div className="flex gap-4 justify-center flex-wrap">
           {/* Local Play */}
-          <div className="flex-1 min-w-[300px] flex flex-col items-center gap-2.5 rounded-[20px] border border-neutral-800 bg-neutral-900 px-6 py-7">
+          <div className="w-full sm:flex-1 sm:min-w-[280px] flex flex-col items-center gap-2.5 rounded-[20px] border border-neutral-800 bg-neutral-900 px-5 sm:px-6 py-6 sm:py-7">
             <div className="w-[72px] h-[72px] rounded-full bg-neutral-800 flex items-center justify-center text-white mb-1.5">
               <Gamepad2 className="w-9 h-9" />
             </div>
@@ -47,7 +47,7 @@ export default function Home() {
           </div>
 
           {/* Online Play */}
-          <div className="flex-1 min-w-[300px] flex flex-col items-center gap-2.5 rounded-[20px] border border-neutral-800 bg-neutral-900 px-6 py-7">
+          <div className="w-full sm:flex-1 sm:min-w-[280px] flex flex-col items-center gap-2.5 rounded-[20px] border border-neutral-800 bg-neutral-900 px-5 sm:px-6 py-6 sm:py-7">
             <div className="w-[72px] h-[72px] rounded-full bg-neutral-800 flex items-center justify-center text-white mb-1.5">
               <Globe className="w-9 h-9" />
             </div>

@@ -92,12 +92,22 @@ class SoundController {
 const sound = new SoundController();
 
 const PEER_CONFIG = {
+  debug: 1,
   config: {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun2.l.google.com:19302' },
       { urls: 'stun:stun.cloudflare.com:3478' },
+      {
+        urls: [
+          'turn:openrelay.metered.ca:80',
+          'turn:openrelay.metered.ca:443',
+          'turn:openrelay.metered.ca:443?transport=tcp',
+        ],
+        username: 'openrelay',
+        credential: 'openrelay',
+      },
     ],
     iceCandidatePoolSize: 10,
   },
@@ -345,8 +355,31 @@ export default function Game() {
     let isCleanedUp = false;
     const hostPeerId = `chess-room-${room}`;
 
+    let guestConnectAttempts = 0;
+    let guestRetryTimeout = null;
+
     const attachConnectionEvents = (connection) => {
       connRef.current = connection;
+
+      // Monitor WebRTC ICE connectivity state
+      if (connection.peerConnection) {
+        connection.peerConnection.oniceconnectionstatechange = () => {
+          const state = connection.peerConnection?.iceConnectionState;
+          if (state === 'connected' || state === 'completed') {
+            setPeerConnected(true);
+            setDrawNotice(null);
+          } else if (state === 'disconnected') {
+            setPeerConnected(false);
+            setDrawNotice('Connection interrupted. Waiting for recovery...');
+          } else if (state === 'failed') {
+            setPeerConnected(false);
+            setDrawNotice('Connection failed between networks. Retrying...');
+            if (connection.peerConnection.restartIce) {
+              connection.peerConnection.restartIce();
+            }
+          }
+        };
+      }
 
       connection.on('open', () => {
         if (isCleanedUp) return;
@@ -381,7 +414,8 @@ export default function Game() {
         }
       });
 
-      connection.on('error', () => {
+      connection.on('error', (err) => {
+        console.warn('Connection error:', err);
         if (!isCleanedUp) {
           setPeerConnected(false);
         }
@@ -405,11 +439,31 @@ export default function Game() {
       } else {
         peer = new Peer(PEER_CONFIG);
 
-        peer.on('open', () => {
-          if (isCleanedUp) return;
-          console.log('Guest connecting to host...');
+        const connectToHost = () => {
+          if (isCleanedUp || !peer || peer.destroyed) return;
+          guestConnectAttempts += 1;
+          setDrawNotice(`Connecting to host (attempt ${guestConnectAttempts}/6)...`);
           const connection = peer.connect(hostPeerId, { reliable: true });
           attachConnectionEvents(connection);
+        };
+
+        peer.on('open', () => {
+          if (isCleanedUp) return;
+          connectToHost();
+        });
+
+        peer.on('error', (err) => {
+          if (isCleanedUp) return;
+          console.warn('Guest PeerJS Error:', err.type, err);
+
+          if (err.type === 'peer-unavailable') {
+            if (guestConnectAttempts < 6) {
+              clearTimeout(guestRetryTimeout);
+              guestRetryTimeout = setTimeout(connectToHost, 2000);
+            } else {
+              setDrawNotice('Host offline or room not found. Ensure Host tab is open first.');
+            }
+          }
         });
       }
 
@@ -426,8 +480,8 @@ export default function Game() {
           }
         }
 
-        if (err.type === 'peer-unavailable') {
-          setDrawNotice('Room not found or Host is offline. Ensure Host tab is open first.');
+        if (err.type === 'peer-unavailable' && isHost) {
+          setDrawNotice('Signaling error. Retrying...');
         }
       });
     };
@@ -436,6 +490,7 @@ export default function Game() {
 
     return () => {
       isCleanedUp = true;
+      clearTimeout(guestRetryTimeout);
       clearInterval(heartbeatInterval);
       if (peer) {
         peer.destroy();
@@ -770,103 +825,111 @@ export default function Game() {
     : 'w';
 
   return (
-    <div className="min-h-screen bg-neutral-950 font-sans relative flex flex-col justify-center py-4">
-      <div className="max-w-md sm:max-w-lg mx-auto w-full px-4">
+    <div className="min-h-screen bg-neutral-950 font-sans relative flex flex-col justify-center py-2 sm:py-4 w-full max-w-full overflow-x-hidden">
+      <div className="max-w-md sm:max-w-lg mx-auto w-full px-2.5 sm:px-4 box-border">
 
-        {/* Top Header Controls */}
-        <div className="flex items-center justify-between mb-3">
-          <button
-            onClick={() => navigate('/')}
-            className="flex items-center gap-1.5 text-neutral-400 hover:text-white text-sm font-semibold transition-colors cursor-pointer"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Back
-          </button>
+        {/* Top Header Controls - Responsive Two-Tier Layout */}
+        <div className="flex flex-col gap-2 mb-2.5 w-full">
+          {/* Row 1: Back + Connection Status & Invite Link */}
+          <div className="flex items-center justify-between gap-2 w-full">
+            <button
+              onClick={() => navigate('/')}
+              className="flex items-center gap-1 text-neutral-400 hover:text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer shrink-0 py-1"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Back</span>
+            </button>
 
-          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+              {isOnline ? (
+                <>
+                  <span className={`flex items-center gap-1 text-[11px] sm:text-xs px-2 py-1 rounded-full shrink-0 ${peerConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'}`}>
+                    {peerConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+                    <span>{peerConnected ? 'Connected' : 'Waiting'}</span>
+                  </span>
+                  <button
+                    onClick={copyInviteLink}
+                    className="flex items-center gap-1 bg-neutral-900 border border-neutral-800 hover:border-neutral-600 text-white px-2.5 sm:px-3 py-1 rounded-full text-[11px] sm:text-xs font-bold uppercase tracking-wide transition-colors cursor-pointer shrink-0"
+                    title="Copy full invite link to clipboard"
+                  >
+                    <LinkIcon className="w-3 h-3 text-amber-400" />
+                    <span>{copiedLink ? 'Copied!' : room ? `Room ${room}` : 'Invite'}</span>
+                    <Copy className="w-3 h-3 text-neutral-400" />
+                  </button>
+                </>
+              ) : (
+                <div className="flex items-center gap-1.5 bg-neutral-900 border border-neutral-800 text-white px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wide shrink-0">
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Local Play</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Row 2: Secondary Tool Actions (Mute, Theme, Flip Board) */}
+          <div className="flex items-center justify-end gap-1.5 w-full">
             <button
               onClick={() => setMuted(!muted)}
-              className="p-1.5 rounded-full bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-700 transition-colors cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white text-xs font-medium cursor-pointer transition-colors"
               title={muted ? 'Unmute sounds' : 'Mute sounds'}
             >
-              {muted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
+              {muted ? <VolumeX className="w-3.5 h-3.5 text-rose-400" /> : <Volume2 className="w-3.5 h-3.5 text-emerald-400" />}
+              <span className="text-[11px]">{muted ? 'Muted' : 'Sound'}</span>
             </button>
 
             <button
               onClick={() => setIsThemeMenuOpen(true)}
-              className="flex items-center gap-1.5 bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-neutral-300 hover:text-white px-3 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-neutral-300 hover:text-white text-xs font-medium cursor-pointer transition-colors"
               title="Board Themes"
             >
               <Palette className="w-3.5 h-3.5 text-amber-400" />
-              Theme
+              <span className="text-[11px]">Theme</span>
             </button>
 
             <button
               onClick={() => setManualOrientation(boardOrientation === 'white' ? 'black' : 'white')}
-              className="p-1.5 rounded-full bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-700 transition-colors cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-neutral-300 hover:text-white text-xs font-medium cursor-pointer transition-colors"
               title={`Flip Board (Currently ${boardOrientation})`}
             >
-              <RotateCw className="w-4 h-4" />
+              <RotateCw className="w-3.5 h-3.5 text-neutral-400" />
+              <span className="text-[11px]">Flip</span>
             </button>
-
-            {isOnline ? (
-              <>
-                <span className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full ${peerConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'}`}>
-                  {peerConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-                  {peerConnected ? 'Connected' : 'Waiting'}
-                </span>
-                <button
-                  onClick={copyInviteLink}
-                  className="flex items-center gap-1.5 bg-neutral-900 border border-neutral-800 hover:border-neutral-600 text-white px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide transition-colors cursor-pointer"
-                  title="Copy full invite link to clipboard"
-                >
-                  <LinkIcon className="w-3.5 h-3.5" />
-                  {copiedLink ? 'Link Copied!' : `Room ${room}`}
-                  <Copy className="w-3.5 h-3.5 text-neutral-400" />
-                </button>
-              </>
-            ) : (
-              <div className="flex items-center gap-1.5 bg-neutral-900 border border-neutral-800 text-white px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide">
-                <Users className="w-3.5 h-3.5" />
-                Local Play
-              </div>
-            )}
           </div>
         </div>
 
         {/* Top Player Info Bar */}
-        <div className="flex items-center justify-between px-2 py-1 mb-1.5 bg-neutral-900/60 rounded-xl border border-neutral-800/80">
-          <div className="flex items-center gap-2">
-            <div className={`w-3 h-3 rounded-full ${boardOrientation === 'white' ? 'bg-neutral-800 border border-neutral-600' : 'bg-white'}`} />
-            <span className="text-xs font-bold text-neutral-200">
+        <div className="flex items-center justify-between px-2.5 py-1.5 mb-1.5 bg-neutral-900/60 rounded-xl border border-neutral-800/80 min-w-0 w-full overflow-hidden">
+          <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
+            <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${boardOrientation === 'white' ? 'bg-neutral-800 border border-neutral-600' : 'bg-white'}`} />
+            <span className="text-xs font-bold text-neutral-200 truncate shrink-0">
               {boardOrientation === 'white'
                 ? (isOnline ? (playerColor === 'b' ? 'You (Black)' : 'Opponent (Black)') : 'Black')
                 : (isOnline ? (playerColor === 'w' ? 'You (White)' : 'Opponent (White)') : 'White')}
             </span>
-            <div className="flex items-center gap-0.5 text-neutral-400 text-sm">
+            <div className="flex items-center gap-0.5 text-neutral-400 text-xs overflow-x-auto scrollbar-none min-w-0">
               {boardOrientation === 'white'
                 ? capturedPieces.w.map((p, i) => (
-                    <span key={i} className="text-xs">{PIECE_SYMBOLS.w[p]}</span>
+                    <span key={i} className="text-xs shrink-0">{PIECE_SYMBOLS.w[p]}</span>
                   ))
                 : capturedPieces.b.map((p, i) => (
-                    <span key={i} className="text-xs">{PIECE_SYMBOLS.b[p]}</span>
+                    <span key={i} className="text-xs shrink-0">{PIECE_SYMBOLS.b[p]}</span>
                   ))}
               {((boardOrientation === 'white' && materialDiff < 0) || (boardOrientation === 'black' && materialDiff > 0)) && (
-                <span className="text-[11px] font-bold text-neutral-400 ml-1">
+                <span className="text-[10px] font-bold text-neutral-400 ml-1 shrink-0">
                   +{Math.abs(materialDiff)}
                 </span>
               )}
             </div>
           </div>
           {((boardOrientation === 'white' && game.turn() === 'b') || (boardOrientation === 'black' && game.turn() === 'w')) && !gameOver && (
-            <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-amber-400/10 text-amber-400 border border-amber-400/30 animate-pulse">
+            <span className="text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-amber-400/10 text-amber-400 border border-amber-400/30 animate-pulse shrink-0 ml-1">
               Turn
             </span>
           )}
         </div>
 
         {/* Chessboard Box */}
-        <div className={`rounded-[20px] border ${currentTheme.border} bg-neutral-900 p-2.5 relative shadow-2xl transition-colors duration-300`}>
+        <div className={`rounded-[20px] border ${currentTheme.border} bg-neutral-900 p-2 sm:p-2.5 relative shadow-2xl transition-colors duration-300 w-full max-w-full overflow-hidden`}>
           <div className="w-full aspect-square">
             <Chessboard options={chessboardOptions} />
           </div>
@@ -913,38 +976,38 @@ export default function Game() {
         </div>
 
         {/* Bottom Player Info Bar */}
-        <div className="flex items-center justify-between px-2 py-1 mt-1.5 bg-neutral-900/60 rounded-xl border border-neutral-800/80">
-          <div className="flex items-center gap-2">
-            <div className={`w-3 h-3 rounded-full ${boardOrientation === 'white' ? 'bg-white' : 'bg-neutral-800 border border-neutral-600'}`} />
-            <span className="text-xs font-bold text-neutral-200">
+        <div className="flex items-center justify-between px-2.5 py-1.5 mt-1.5 bg-neutral-900/60 rounded-xl border border-neutral-800/80 min-w-0 w-full overflow-hidden">
+          <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
+            <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${boardOrientation === 'white' ? 'bg-white' : 'bg-neutral-800 border border-neutral-600'}`} />
+            <span className="text-xs font-bold text-neutral-200 truncate shrink-0">
               {boardOrientation === 'white'
                 ? (isOnline ? (playerColor === 'w' ? 'You (White)' : 'Opponent (White)') : 'White')
                 : (isOnline ? (playerColor === 'b' ? 'You (Black)' : 'Opponent (Black)') : 'Black')}
             </span>
-            <div className="flex items-center gap-0.5 text-neutral-400 text-sm">
+            <div className="flex items-center gap-0.5 text-neutral-400 text-xs overflow-x-auto scrollbar-none min-w-0">
               {boardOrientation === 'white'
                 ? capturedPieces.b.map((p, i) => (
-                    <span key={i} className="text-xs">{PIECE_SYMBOLS.b[p]}</span>
+                    <span key={i} className="text-xs shrink-0">{PIECE_SYMBOLS.b[p]}</span>
                   ))
                 : capturedPieces.w.map((p, i) => (
-                    <span key={i} className="text-xs">{PIECE_SYMBOLS.w[p]}</span>
+                    <span key={i} className="text-xs shrink-0">{PIECE_SYMBOLS.w[p]}</span>
                   ))}
               {((boardOrientation === 'white' && materialDiff > 0) || (boardOrientation === 'black' && materialDiff < 0)) && (
-                <span className="text-[11px] font-bold text-neutral-400 ml-1">
+                <span className="text-[10px] font-bold text-neutral-400 ml-1 shrink-0">
                   +{Math.abs(materialDiff)}
                 </span>
               )}
             </div>
           </div>
           {((boardOrientation === 'white' && game.turn() === 'w') || (boardOrientation === 'black' && game.turn() === 'b')) && !gameOver && (
-            <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-amber-400/10 text-amber-400 border border-amber-400/30 animate-pulse">
+            <span className="text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-amber-400/10 text-amber-400 border border-amber-400/30 animate-pulse shrink-0 ml-1">
               Turn
             </span>
           )}
         </div>
 
         {/* Status & Alerts Bar */}
-        <div className="flex flex-col items-center gap-1.5 my-3 text-center">
+        <div className="flex flex-col items-center gap-1.5 my-3 text-center w-full px-2">
           <h2 className="text-white text-base sm:text-lg font-bold m-0">
             {gameOver ? (
               <span className="text-amber-400">{getGameOverReason()}</span>
@@ -962,7 +1025,7 @@ export default function Game() {
               </span>
             )}
             {drawNotice && (
-              <p className="text-amber-400 text-xs font-semibold m-0 bg-amber-400/10 px-3 py-0.5 rounded-full border border-amber-400/20">
+              <p className="text-amber-400 text-xs font-semibold m-0 bg-amber-400/10 px-3 py-0.5 rounded-full border border-amber-400/20 max-w-full break-words">
                 {drawNotice}
               </p>
             )}
@@ -973,7 +1036,7 @@ export default function Game() {
         {movePairs.length > 0 && (
           <div
             ref={moveHistoryScrollRef}
-            className="flex items-center gap-2 overflow-x-auto py-2 px-3 bg-neutral-900 border border-neutral-800 rounded-xl mb-3 scrollbar-none text-xs"
+            className="flex items-center gap-2 overflow-x-auto py-2 px-3 bg-neutral-900 border border-neutral-800 rounded-xl mb-3 scrollbar-none text-xs w-full max-w-full"
           >
             <span className="text-neutral-500 font-bold uppercase text-[10px] shrink-0">Moves:</span>
             {movePairs.map((pair) => (
